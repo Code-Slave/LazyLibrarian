@@ -22,7 +22,7 @@ import lazylibrarian
 from lazylibrarian import logger, database
 from lazylibrarian.bookwork import getAuthorImage
 from lazylibrarian.cache import cache_img
-from lazylibrarian.formatter import today, unaccented, formatAuthorName
+from lazylibrarian.formatter import today, unaccented, formatAuthorName, makeUnicode
 from lazylibrarian.grsync import grfollow
 from lazylibrarian.gb import GoogleBooks
 from lazylibrarian.gr import GoodReads
@@ -106,8 +106,7 @@ def addAuthorNameToDB(author=None, refresh=False, addbooks=True):
     if not check_exist_author:
         logger.debug("Failed to match author [%s] in database" % author)
         return "", "", False
-    if isinstance(author, str) and hasattr(author, "decode"):
-        author = author.decode(lazylibrarian.SYS_ENCODING)
+    author = makeUnicode(author)
     return author, check_exist_author['AuthorID'], new
 
 
@@ -154,11 +153,15 @@ def addAuthorToDB(authorname=None, refresh=False, authorid=None, addbooks=True):
                     "DateAdded": today()
                 }
                 if not dbauthor or (dbauthor and not dbauthor['manual']):
-                    newValueDict["AuthorName"] = author['authorname']
                     newValueDict["AuthorImg"] = author['authorimg']
                     newValueDict["AuthorBorn"] = author['authorborn']
                     newValueDict["AuthorDeath"] = author['authordeath']
-
+                    if not dbauthor:
+                        newValueDict["AuthorName"] = author['authorname']
+                    elif dbauthor['authorname'] != author['authorname']:
+                        authorname = dbauthor['authorname']
+                        logger.warn("Authorname mismatch for %s [%s][%s]" %
+                                    (authorid, dbauthor['authorname'], author['authorname']))
                 myDB.upsert("authors", newValueDict, controlValueDict)
                 match = True
             else:

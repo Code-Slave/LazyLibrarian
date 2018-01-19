@@ -27,7 +27,7 @@ import urllib2
 import lazylibrarian
 from lazylibrarian import logger
 from lazylibrarian.common import USER_AGENT
-from lazylibrarian.formatter import check_int, getList
+from lazylibrarian.formatter import check_int, getList, makeBytestr, makeUnicode
 
 
 class qbittorrentclient(object):
@@ -41,7 +41,7 @@ class qbittorrentclient(object):
         if not host or not port:
             logger.error('Invalid Qbittorrent host or port, check your config')
 
-        if not host.startswith('http'):
+        if not host.startswith("http://") and not host.startswith("https://"):
             host = 'http://' + host
 
         if host.endswith('/'):
@@ -57,6 +57,7 @@ class qbittorrentclient(object):
         self.cookiejar = cookielib.CookieJar()
         self.opener = self._make_opener()
         self._get_sid(self.base_url, self.username, self.password)
+        self.api = self._api_version()
 
     def _make_opener(self):
         # create opener with cookie handler to carry QBitTorrent SID cookie
@@ -64,9 +65,18 @@ class qbittorrentclient(object):
         handlers = [cookie_handler]
         return urllib2.build_opener(*handlers)
 
+    def _api_version(self):
+        # noinspection PyBroadException
+        try:
+            version = int(self._command('version/api'))
+        except Exception as err:
+            logger.debug('Error getting api version. qBittorrent %s: %s' % (type(err).__name__, str(err)))
+            version = 1
+        return version
+
     def _get_sid(self, base_url, username, password):
         # login so we can capture SID cookie
-        login_data = urllib.urlencode({'username': username, 'password': password})
+        login_data = makeBytestr(urllib.urlencode({'username': username, 'password': password}))
         try:
             _ = self.opener.open(base_url + '/login', login_data)
         except Exception as err:
@@ -82,11 +92,12 @@ class qbittorrentclient(object):
         url = self.base_url + '/' + command
         data = None
         headers = dict()
-        if files:  # Use Multipart form
+
+        if files or content_type == 'multipart/form-data':
             data, headers = encode_multipart(args, files, '-------------------------acebdf13572468')
         else:
             if args:
-                data = urllib.urlencode(args)
+                data = makeBytestr(urllib.urlencode(args))
             if content_type:
                 headers['Content-Type'] = content_type
 
@@ -99,20 +110,25 @@ class qbittorrentclient(object):
 
         try:
             response = self.opener.open(request)
-            info = response.info()
+            try:
+                contentType = response.headers['content-type']
+            except KeyError:
+                contentType = ''
 
-            if info:
-                if info.getheader('content-type'):
-                    if info.getheader('content-type') == 'application/json':
-                        return json.loads(response.read())
-                        # response code is always 200, whether success or fail
-                    else:
-                        resp = ''
-                        for line in response:
-                            resp = resp + line
-                        logger.debug("QBitTorrent returned %s" % resp)
-                        if resp != 'Ok.':
-                            return False
+            # some commands return json
+            if contentType == 'application/json':
+                return json.loads(response.read())
+            else:
+                # some commands return plain text
+                resp = response.read()
+                resp = makeUnicode(resp)
+                logger.debug("QBitTorrent returned %s" % resp)
+                if command == 'version/api':
+                    return resp
+                # some just return Ok. or Fails.
+                if resp and resp != 'Ok.':
+                    return False
+            # some commands return nothing but response code (always 200)
             return True
         except urllib2.URLError as err:
             logger.debug('Failed URL: %s' % url)
@@ -120,6 +136,7 @@ class qbittorrentclient(object):
             return False
 
     def _get_list(self, **args):
+        # type: (dict) -> list
         return self._command('query/torrents', args)
 
     def _get_settings(self):
@@ -130,7 +147,7 @@ class qbittorrentclient(object):
     def get_savepath(self, hashid):
         logger.debug('qb.get_savepath(%s)' % hashid)
         torrentList = self._get_list()
-        for torrent in torrentList:
+        for torrent in list(torrentList):
             if torrent['hash']:
                 if torrent['hash'].upper() == hashid.upper():
                     return torrent['save_path']
@@ -175,17 +192,17 @@ def removeTorrent(hashid, remove_data=False):
     qbclient = qbittorrentclient()
     # noinspection PyProtectedMember
     torrentList = qbclient._get_list()
-    for torrent in torrentList:
-        if torrent['hash'].upper() == hashid.upper():
-            if torrent['state'] == 'uploading' or torrent['state'] == 'stalledUP':
-                logger.info('%s has finished seeding, removing torrent and data' % torrent['name'])
-                qbclient.remove(hashid, remove_data)
-                return True
-            else:
-                logger.info(
-                    '%s has not finished seeding yet, torrent will not be removed, will try again on next run' %
-                    torrent['name'])
-                return False
+    if torrentList:
+        for torrent in torrentList:
+            if torrent['hash'].upper() == hashid.upper():
+                if torrent['state'] == 'uploading' or torrent['state'] == 'stalledUP':
+                    logger.info('%s has finished seeding, removing torrent and data' % torrent['name'])
+                    qbclient.remove(hashid, remove_data)
+                    return True
+                else:
+                    logger.info(
+                        '%s has not finished seeding yet, torrent will not be removed, will try again on next run' %
+                        torrent['name'])
     return False
 
 
@@ -195,24 +212,38 @@ def checkLink():
         qbclient = qbittorrentclient()
         if len(qbclient.cookiejar):
             # qbittorrent creates a new label if needed
-            # can't see how to get a list of known labels
-            if lazylibrarian.CONFIG['QBITTORRENT_LABEL']:
-                return "qBittorrent login successful, label not checked"
-            return "qBittorrent login successful"
+            # can't see how to get a list of known labels to check against
+            return "qBittorrent login successful, api: %s" % qbclient.api
         return "qBittorrent login FAILED\nCheck debug log"
     except Exception as err:
         return "qBittorrent login FAILED: %s %s" % (type(err).__name__, str(err))
 
 
-def addTorrent(link):
+def addTorrent(link, hashid):
     logger.debug('addTorrent(%s)' % link)
 
     qbclient = qbittorrentclient()
-    args = {'urls': link, 'savepath': lazylibrarian.DIRECTORY('Download')}
+    args = {'savepath': lazylibrarian.DIRECTORY('Download')}
     if lazylibrarian.CONFIG['QBITTORRENT_LABEL']:
-        args['label'] = lazylibrarian.CONFIG['QBITTORRENT_LABEL']
+        if 6 < qbclient.api < 10:
+            args['label'] = lazylibrarian.CONFIG['QBITTORRENT_LABEL']
+        elif qbclient.api >= 10:
+            args['category'] = lazylibrarian.CONFIG['QBITTORRENT_LABEL']
+    logger.debug('addTorrent args(%s)' % args)
+    args['urls'] = link
     # noinspection PyProtectedMember
-    return qbclient._command('command/download', args, 'application/x-www-form-urlencoded')
+    if qbclient._command('command/download', args, 'multipart/form-data'):
+        return True
+    # sometimes returns "Fails." when it hasn't failed, so look if hashid was added correctly
+    logger.debug("qBittorrent: addTorrent thinks it failed")
+    time.sleep(2)
+    # noinspection PyProtectedMember
+    torrents = qbclient._get_list()
+    if hashid.upper() in str(torrents).upper():
+        logger.debug("qBittorrent: hashid found in torrent list, assume success")
+        return True
+    logger.debug("qBittorrent: hashid not found in torrent list, addTorrent failed")
+    return False
 
 
 def addFile(data):
@@ -318,28 +349,30 @@ def encode_multipart(fields, files, boundary=None):
         boundary = ''.join(random.choice(_BOUNDARY_CHARS) for _ in range(30))
     lines = []
 
-    for name, value in fields.items():
-        lines.extend((
-            '--{0}'.format(boundary),
-            'Content-Disposition: form-data; name="{0}"'.format(escape_quote(name)),
-            '',
-            str(value),
-        ))
+    if fields:
+        for name, value in fields.items():
+            lines.extend((
+                '--{0}'.format(boundary),
+                'Content-Disposition: form-data; name="{0}"'.format(escape_quote(name)),
+                '',
+                str(value),
+            ))
 
-    for name, value in files.items():
-        filename = value['filename']
-        if 'mimetype' in value:
-            mimetype = value['mimetype']
-        else:
-            mimetype = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
-        lines.extend((
-            '--{0}'.format(boundary),
-            'Content-Disposition: form-data; name="{0}"; filename="{1}"'.format(
-                escape_quote(name), escape_quote(filename)),
-            'Content-Type: {0}'.format(mimetype),
-            '',
-            value['content'],
-        ))
+    if files:
+        for name, value in files.items():
+            filename = value['filename']
+            if 'mimetype' in value:
+                mimetype = value['mimetype']
+            else:
+                mimetype = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+            lines.extend((
+                '--{0}'.format(boundary),
+                'Content-Disposition: form-data; name="{0}"; filename="{1}"'.format(
+                    escape_quote(name), escape_quote(filename)),
+                'Content-Type: {0}'.format(mimetype),
+                '',
+                value['content'],
+            ))
 
     lines.extend((
         '--{0}--'.format(boundary),

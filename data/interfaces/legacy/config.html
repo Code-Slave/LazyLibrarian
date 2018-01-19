@@ -775,15 +775,6 @@
               <input type="text" placeholder="Enter URL Here" id="kat_host" name="kat_host" value="${lazylibrarian.CONFIG['KAT_HOST']}" size="26">
               <br>
               <%
-                if lazylibrarian.CONFIG['WWT'] == True:
-                    checked = 'checked="checked"'
-                else:
-                    checked = ''
-              %>
-              <input type="checkbox" id="wwt" name="wwt" value=1 ${checked} style="margin-bottom:4px;" /> WorldWideTorrent
-              <input type="text" placeholder="Enter URL Here" id="wwt_host" name="wwt_host" value="${lazylibrarian.CONFIG['WWT_HOST']}" size="26">
-              <br>
-              <%
                 if lazylibrarian.CONFIG['TPB'] == True:
                     checked = 'checked="checked"'
                 else:
@@ -874,6 +865,16 @@
               <div>
                 <label>Version Check Interval:</label>
                 <input type="text" id="versioncheck_interval" name="versioncheck_interval" value="${lazylibrarian.CONFIG['VERSIONCHECK_INTERVAL']}" size="8"> (hours)
+              <%
+                    if lazylibrarian.CONFIG['AUTO_UPDATE'] == True:
+                        checked = 'checked="checked"'
+                    else:
+                        checked = ''
+              %>
+              <br>
+              <input type="checkbox" id="auto_update" name="auto_update" value=1 ${checked} /><label> Auto Update when new version found</label>
+              <br>
+              <small>This will auto update if the task finds a new version. Does not apply to manual version checks</small>
               </div>
               <small>
                 <BR>
@@ -1080,6 +1081,19 @@
               None  to disable cover creation</small>
           </td>
         </tr>
+          <td>
+            <div>
+              <%
+                    if lazylibrarian.CONFIG['IMP_MAGOPF'] == True:
+                        checked = 'checked="checked"'
+                    else:
+                        checked = ''
+                    %>
+              <input type="checkbox" id="imp_magopf" name="imp_magopf" value=1 ${checked} />
+              <label> Create opf files for magazines</label>
+              <br>
+            </div>
+          </td>
         <tr>
           <td>
             <div>

@@ -20,7 +20,7 @@ import urlparse
 import lazylibrarian
 from lazylibrarian import logger
 from lazylibrarian.cache import fetchURL
-from lazylibrarian.formatter import plural, unaccented, formatAuthorName
+from lazylibrarian.formatter import plural, unaccented, formatAuthorName, makeUnicode
 from lib.BeautifulSoup import BeautifulSoup, BeautifulStoneSoup
 
 
@@ -59,7 +59,7 @@ def redirect_url(genhost, url):
     return myurl.geturl()
 
 
-def GEN(book=None, prov=None):
+def GEN(book=None, prov=None, test=False):
     errmsg = ''
     provider = "libgen.io"
     if prov is None:
@@ -76,9 +76,7 @@ def GEN(book=None, prov=None):
     if search[0] == '/':
         search = search[1:]
 
-    sterm = book['searchterm']
-    if isinstance(sterm, str) and hasattr(sterm, "decode"):
-        sterm = sterm.decode('utf-8')
+    sterm = makeUnicode(book['searchterm'])
 
     page = 1
     results = []
@@ -114,6 +112,7 @@ def GEN(book=None, prov=None):
             # may return 404 if no results, not really an error
             if '404' in result:
                 logger.debug("No results found from %s for %s" % (provider, sterm))
+                success = True
             elif '111' in result:
                 # looks like libgen has ip based access limits
                 logger.error('Access forbidden. Please wait a while before trying %s again.' % provider)
@@ -123,6 +122,9 @@ def GEN(book=None, prov=None):
                 logger.debug('Error fetching page data from %s: %s' % (provider, result))
                 errmsg = result
             result = False
+
+        if test:
+            return success
 
         if result:
             logger.debug('Parsing results from <a href="%s">%s</a>' % (searchURL, provider))

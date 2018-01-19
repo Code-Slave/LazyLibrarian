@@ -34,7 +34,7 @@ from lazylibrarian import logger, postprocess, searchbook, searchrss, librarysyn
     searchmag, magazinescan, bookwork, importer, grsync
 from lazylibrarian.cache import fetchURL
 from lazylibrarian.common import restartJobs, logHeader
-from lazylibrarian.formatter import getList, bookSeries, plural, unaccented, check_int, unaccented_str, decodeName
+from lazylibrarian.formatter import getList, bookSeries, plural, unaccented, check_int, unaccented_str, makeUnicode
 from lib.apscheduler.scheduler import Scheduler
 
 # Transient globals NOT stored in config
@@ -53,6 +53,7 @@ CONFIG = {}
 CFG = ''
 DBFILE = None
 COMMIT_LIST = None
+AUTOLOGIN = False
 
 # These are only used in startup
 SCHED = Scheduler()
@@ -145,7 +146,7 @@ isbn_978_dict = {
 # Any undefined on startup will be set to the default value
 # Any _NOT_ in the web ui will remain unchanged on config save
 CONFIG_GIT = ['GIT_REPO', 'GIT_USER', 'GIT_BRANCH', 'LATEST_VERSION', 'GIT_UPDATED', 'CURRENT_VERSION',
-              'COMMITS_BEHIND', 'INSTALL_TYPE']
+              'COMMITS_BEHIND', 'INSTALL_TYPE', 'AUTO_UPDATE']
 CONFIG_NONWEB = ['LOGFILES', 'LOGSIZE', 'NAME_POSTFIX', 'DIR_PERM', 'FILE_PERM', 'BLOCKLIST_TIMER',
                  'WALL_COLUMNS', 'ADMIN_EMAIL', 'HTTP_TIMEOUT', 'PROXY_LOCAL']
 # default interface does not know about these items, so leave them unchanged
@@ -219,6 +220,7 @@ CONFIG_DEFINITIONS = {
     'IMP_ONLYISBN': ('bool', 'General', 0),
     'IMP_SINGLEBOOK': ('bool', 'General', 0),
     'IMP_RENAME': ('bool', 'General', 0),
+    'IMP_MAGOPF': ('bool', 'General', 1),
     'IMP_CONVERT': ('str', 'General', ''),
     'GIT_PROGRAM': ('str', 'General', ''),
     'CACHE_AGE': ('int', 'General', 30),
@@ -231,6 +233,7 @@ CONFIG_DEFINITIONS = {
     'CURRENT_VERSION': ('str', 'Git', ''),
     'LATEST_VERSION': ('str', 'Git', ''),
     'COMMITS_BEHIND': ('int', 'Git', 0),
+    'AUTO_UPDATE': ('int', 'Git', 0),
     'SAB_HOST': ('str', 'SABnzbd', ''),
     'SAB_PORT': ('int', 'SABnzbd', 0),
     'SAB_SUBDIR': ('str', 'SABnzbd', ''),
@@ -303,9 +306,9 @@ CONFIG_DEFINITIONS = {
     'KAT_HOST': ('str', 'KAT', 'kickass.cd'),
     'KAT': ('bool', 'KAT', 0),
     'KAT_DLPRIORITY': ('int', 'KAT', 0),
-    'WWT_HOST': ('str', 'WWT', 'https://worldwidetorrents.eu'),
-    'WWT': ('bool', 'WWT', 0),
-    'WWT_DLPRIORITY': ('int', 'WWT', 0),
+    #  'WWT_HOST': ('str', 'WWT', 'https://worldwidetorrents.eu'),
+    #  'WWT': ('bool', 'WWT', 0),
+    #  'WWT_DLPRIORITY': ('int', 'WWT', 0),
     'TPB_HOST': ('str', 'TPB', 'https://pirateproxy.cc'),
     'TPB': ('bool', 'TPB', 0),
     'TPB_DLPRIORITY': ('int', 'TPB', 0),
@@ -499,8 +502,7 @@ def check_setting(cfg_type, cfg_name, item_name, def_val, log=True):
             logger.debug(str(e))
             my_val = str(def_val)
         finally:
-            if isinstance(my_val, str) and hasattr(my_val, "decode"):
-                my_val = my_val.decode(SYS_ENCODING)
+            my_val = makeUnicode(my_val)
 
     check_section(cfg_name)
     # noinspection PyUnresolvedReferences
@@ -1078,7 +1080,7 @@ def DIRECTORY(dirname):
         usedir = os.getcwd()
 
     # return directory as unicode so we get unicode results from listdir
-    return decodeName(usedir)
+    return makeUnicode(usedir)
 
 
 # noinspection PyUnresolvedReferences
@@ -1120,7 +1122,7 @@ def USE_RSS():
 
 def USE_TOR():
     count = 0
-    for provider in [CONFIG['KAT'], CONFIG['TPB'], CONFIG['ZOO'], CONFIG['LIME'], CONFIG['TDL'], CONFIG['WWT']]:
+    for provider in [CONFIG['KAT'], CONFIG['TPB'], CONFIG['ZOO'], CONFIG['LIME'], CONFIG['TDL']]:
         if bool(provider):
             count += 1
     return count

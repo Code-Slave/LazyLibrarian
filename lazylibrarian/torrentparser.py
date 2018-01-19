@@ -21,7 +21,7 @@ import lazylibrarian
 import lib.feedparser as feedparser
 from lazylibrarian import logger
 from lazylibrarian.cache import fetchURL
-from lazylibrarian.formatter import plural, unaccented
+from lazylibrarian.formatter import plural, unaccented, makeUnicode
 from lib.BeautifulSoup import BeautifulSoup
 
 
@@ -34,7 +34,7 @@ def url_fix(s, charset='utf-8'):
     return urlparse.urlunsplit((scheme, netloc, path, qs, anchor))
 
 
-def TPB(book=None):
+def TPB(book=None, test=False):
     errmsg = ''
     provider = "TPB"
     host = lazylibrarian.CONFIG['TPB_HOST']
@@ -52,9 +52,7 @@ def TPB(book=None):
         elif book['library'] == 'magazine':
             cat = 0
 
-    sterm = book['searchterm']
-    if isinstance(sterm, str) and hasattr(sterm, "decode"):
-        sterm = sterm.decode('utf-8')
+    sterm = makeUnicode(book['searchterm'])
 
     page = 0
     results = []
@@ -79,11 +77,15 @@ def TPB(book=None):
             # may return 404 if no results, not really an error
             if '404' in result:
                 logger.debug("No results found from %s for %s" % (provider, sterm))
+                success = True
             else:
                 logger.debug(searchURL)
                 logger.debug('Error fetching data from %s: %s' % (provider, result))
                 errmsg = result
             result = False
+
+        if test:
+            return success
 
         if result:
             logger.debug('Parsing results from <a href="%s">%s</a>' % (searchURL, provider))
@@ -167,7 +169,7 @@ def TPB(book=None):
     return results, errmsg
 
 
-def KAT(book=None):
+def KAT(book=None, test=False):
     errmsg = ''
     provider = "KAT"
     host = lazylibrarian.CONFIG['KAT_HOST']
@@ -183,20 +185,22 @@ def KAT(book=None):
     }
     searchURL = providerurl + "/?%s" % urllib.urlencode(params)
 
-    sterm = book['searchterm']
-    if isinstance(sterm, str) and hasattr(sterm, "decode"):
-        sterm = sterm.decode('utf-8')
+    sterm = makeUnicode(book['searchterm'])
 
     result, success = fetchURL(searchURL)
     if not success:
         # seems KAT returns 404 if no results, not really an error
         if '404' in result:
             logger.debug("No results found from %s for %s" % (provider, sterm))
+            success = True
         else:
             logger.debug(searchURL)
             logger.debug('Error fetching data from %s: %s' % (provider, result))
             errmsg = result
         result = False
+
+    if test:
+        return success
 
     results = []
 
@@ -282,7 +286,7 @@ def KAT(book=None):
     return results, errmsg
 
 
-def WWT(book=None):
+def WWT(book=None, test=False):
     errmsg = ''
     provider = "WorldWideTorrents"
     host = lazylibrarian.CONFIG['WWT_HOST']
@@ -291,9 +295,7 @@ def WWT(book=None):
 
     providerurl = url_fix(host + "/torrents-search.php")
 
-    sterm = book['searchterm']
-    if isinstance(sterm, str) and hasattr(sterm, "decode"):
-        sterm = sterm.decode('utf-8')
+    sterm = makeUnicode(book['searchterm'])
 
     cat = 0  # 0=all, 36=ebooks, 52=mags, 56=audiobooks
     if 'library' in book:
@@ -323,11 +325,15 @@ def WWT(book=None):
             # might return 404 if no results, not really an error
             if '404' in result:
                 logger.debug("No results found from %s for %s" % (provider, sterm))
+                success = True
             else:
                 logger.debug(searchURL)
                 logger.debug('Error fetching data from %s: %s' % (provider, result))
                 errmsg = result
             result = False
+
+        if test:
+            return success
 
         if result:
             logger.debug('Parsing results from <a href="%s">%s</a>' % (searchURL, provider))
@@ -417,7 +423,7 @@ def WWT(book=None):
     return results, errmsg
 
 
-def EXTRA(book=None):
+def EXTRA(book=None, test=False):
     errmsg = ''
     provider = "Extratorrent"
     host = lazylibrarian.CONFIG['EXTRA_HOST']
@@ -433,20 +439,21 @@ def EXTRA(book=None):
     }
     searchURL = providerurl + "/?%s" % urllib.urlencode(params)
 
-    sterm = book['searchterm']
-    if isinstance(sterm, str) and hasattr(sterm, "decode"):
-        sterm = sterm.decode('utf-8')
+    sterm = makeUnicode(book['searchterm'])
 
     data, success = fetchURL(searchURL)
     if not success:
         # may return 404 if no results, not really an error
         if '404' in data:
             logger.debug("No results found from %s for %s" % (provider, sterm))
+            success = True
         else:
             logger.debug('Error fetching data from %s: %s' % (provider, data))
             errmsg = data
-
         data = False
+
+    if test:
+        return success
 
     results = []
 
@@ -499,7 +506,7 @@ def EXTRA(book=None):
     return results, errmsg
 
 
-def ZOO(book=None):
+def ZOO(book=None, test=False):
     errmsg = ''
     provider = "zooqle"
     host = lazylibrarian.CONFIG['ZOO_HOST']
@@ -515,20 +522,22 @@ def ZOO(book=None):
     }
     searchURL = providerurl + "?%s" % urllib.urlencode(params)
 
-    sterm = book['searchterm']
-    if isinstance(sterm, str) and hasattr(sterm, "decode"):
-        sterm = sterm.decode('utf-8')
+    sterm = makeUnicode(book['searchterm'])
 
     data, success = fetchURL(searchURL)
     if not success:
         # may return 404 if no results, not really an error
         if '404' in data:
             logger.debug("No results found from %s for %s" % (provider, sterm))
+            success = True
         else:
             logger.debug(searchURL)
             logger.debug('Error fetching data from %s: %s' % (provider, data))
             errmsg = data
         data = False
+
+    if test:
+        return success
 
     results = []
 
@@ -584,7 +593,7 @@ def ZOO(book=None):
     return results, errmsg
 
 
-def LIME(book=None):
+def LIME(book=None, test=False):
     errmsg = ''
     provider = "Limetorrent"
     host = lazylibrarian.CONFIG['LIME_HOST']
@@ -597,20 +606,22 @@ def LIME(book=None):
     providerurl = url_fix(host + "/searchrss/other")
     searchURL = providerurl + "?%s" % urllib.urlencode(params)
 
-    sterm = book['searchterm']
-    if isinstance(sterm, str) and hasattr(sterm, "decode"):
-        sterm = sterm.decode('utf-8')
+    sterm = makeUnicode(book['searchterm'])
 
     data, success = fetchURL(searchURL)
     if not success:
         # may return 404 if no results, not really an error
         if '404' in data:
             logger.debug("No results found from %s for %s" % (provider, sterm))
+            success = True
         else:
             logger.debug(searchURL)
             logger.debug('Error fetching data from %s: %s' % (provider, data))
             errmsg = data
         data = False
+
+    if test:
+        return success
 
     results = []
 
@@ -668,7 +679,7 @@ def LIME(book=None):
     return results, errmsg
 
 
-def TDL(book=None):
+def TDL(book=None, test=False):
     errmsg = ''
     provider = "torrentdownloads"
     host = lazylibrarian.CONFIG['TDL_HOST']
@@ -684,20 +695,22 @@ def TDL(book=None):
     }
     searchURL = providerurl + "/rss.xml?%s" % urllib.urlencode(params)
 
-    sterm = book['searchterm']
-    if isinstance(sterm, str) and hasattr(sterm, "decode"):
-        sterm = sterm.decode('utf-8')
+    sterm = makeUnicode(book['searchterm'])
 
     data, success = fetchURL(searchURL)
     if not success:
         # may return 404 if no results, not really an error
         if '404' in data:
             logger.debug("No results found from %s for %s" % (provider, sterm))
+            success = True
         else:
             logger.debug(searchURL)
             logger.debug('Error fetching data from %s: %s' % (provider, data))
             errmsg = data
         data = False
+
+    if test:
+        return success
 
     results = []
 
