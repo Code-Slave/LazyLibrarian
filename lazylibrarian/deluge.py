@@ -30,7 +30,10 @@ import re
 import time
 import traceback
 from base64 import b64encode
-import lib.requests as requests
+try:
+    import requests
+except ImportError:
+    import lib.requests as requests
 
 import lazylibrarian
 from lazylibrarian import logger
@@ -223,7 +226,7 @@ def _get_auth():
 
     delugeweb_password = lazylibrarian.CONFIG['DELUGE_PASS']
 
-    if not delugeweb_host.startswith('http'):
+    if not delugeweb_host.startswith("http://") and not delugeweb_host.startswith("https://"):
         delugeweb_host = 'http://%s' % delugeweb_host
 
     if delugeweb_host.endswith('/'):

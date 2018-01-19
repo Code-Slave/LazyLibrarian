@@ -37,17 +37,18 @@ from lazylibrarian.common import showJobs, restartJobs, clearLog, scheduleJob, c
 from lazylibrarian.csvfile import import_CSV, export_CSV
 from lazylibrarian.downloadmethods import NZBDownloadMethod, TORDownloadMethod, DirectDownloadMethod
 from lazylibrarian.formatter import unaccented, unaccented_str, plural, now, today, check_int, replace_all, \
-    safe_unicode, cleanName, surnameFirst, sortDefinite, getList
+    safe_unicode, cleanName, surnameFirst, sortDefinite, getList, makeUnicode
 from lazylibrarian.gb import GoogleBooks
 from lazylibrarian.gr import GoodReads
 from lazylibrarian.importer import addAuthorToDB, addAuthorNameToDB, update_totals, search_for
 from lazylibrarian.librarysync import LibraryScan
 from lazylibrarian.manualbook import searchItem
 from lazylibrarian.notifiers import notify_snatch, custom_notify_snatch
-from lazylibrarian.postprocess import processAlternate, processDir
+from lazylibrarian.postprocess import processAlternate, processDir, delete_task
 from lazylibrarian.searchbook import search_book
 from lazylibrarian.searchmag import search_magazines
-from lazylibrarian.calibre import calibreTest
+from lazylibrarian.calibre import calibreTest, syncCalibreList
+from lazylibrarian.providers import test_provider
 from lib.deluge_client import DelugeRPCClient
 from mako import exceptions
 from mako.lookup import TemplateLookup
@@ -88,6 +89,7 @@ def serve_template(templatename, **kwargs):
                 res = myDB.match('SELECT UserName,Perms,UserID from users')
                 cherrypy.response.cookie['ll_uid'] = res['UserID']
                 logger.debug("Auto-login for %s" % res['UserName'])
+                lazylibrarian.AUTOLOGIN = True
         if res:
             perm = check_int(res['Perms'], 0)
             username = res['UserName']
@@ -313,6 +315,16 @@ class WebInterface(object):
                     if pwd != user['password']:
                         changes += ' password'
                         myDB.action('UPDATE users SET password=? WHERE UserID=?', (pwd, userid))
+
+                # only allow admin to change these
+                # if kwargs['calread'] and user['CalibreRead'] != kwargs['calread']:
+                #     changes += ' CalibreRead'
+                #     myDB.action('UPDATE users SET CalibreRead=? WHERE UserID=?', (kwargs['calread'], userid))
+
+                # if kwargs['caltoread'] and user['CalibreToRead'] != kwargs['caltoread']:
+                #     changes += ' CalibreToRead'
+                #     myDB.action('UPDATE users SET CalibreToRead=? WHERE UserID=?', (kwargs['caltoread'], userid))
+
             if changes:
                 return 'Updated user details:%s' % changes
         return "No changes made"
@@ -405,7 +417,7 @@ class WebInterface(object):
         self.label_thread('USERADMIN')
         myDB = database.DBConnection()
         title = "Manage User Accounts"
-        users = myDB.select('SELECT UserID, UserName, Name, Email, Perms from users')
+        users = myDB.select('SELECT UserID, UserName, Name, Email, Perms, CalibreRead, CalibreToRead from users')
         return serve_template(templatename="users.html", title=title, users=users)
 
     @cherrypy.expose
@@ -435,8 +447,9 @@ class WebInterface(object):
         myDB = database.DBConnection()
         match = myDB.match('SELECT * from users where UserName=?', (kwargs['user'],))
         if match:
-            return simplejson.dumps({'email': match['Email'], 'name': match['Name'], 'perms': match['Perms'], })
-        return simplejson.dumps({'email': '', 'name': '', 'perms': '0', })
+            return simplejson.dumps({'email': match['Email'], 'name': match['Name'], 'perms': match['Perms'],
+                                    'calread': match['CalibreRead'], 'caltoread': match['CalibreToRead']})
+        return simplejson.dumps({'email': '', 'name': '', 'perms': '0', 'calread': '', 'caltoread': ''})
 
     @cherrypy.expose
     def admin_users(self, **kwargs):
@@ -507,7 +520,8 @@ class WebInterface(object):
                     return "Username already exists"
 
             changes = ''
-            details = myDB.match('SELECT UserID,Name,Email,Password,Perms from users where UserName=?', (user,))
+            cmd = 'SELECT UserID,Name,Email,Password,Perms,CalibreRead,CalibreToRead from users where UserName=?'
+            details = myDB.match(cmd, (user,))
             if details:
                 userid = details['UserID']
                 if kwargs['username'] and kwargs['username'] != user:
@@ -529,6 +543,15 @@ class WebInterface(object):
                     if pwd != details['Password']:
                         changes += ' password'
                         myDB.action('UPDATE users SET password=? WHERE UserID=?', (pwd, userid))
+
+                if kwargs['calread'] and details['CalibreRead'] != kwargs['calread']:
+                    changes += ' CalibreRead'
+                    myDB.action('UPDATE users SET CalibreRead=? WHERE UserID=?', (kwargs['calread'], userid))
+
+                if kwargs['caltoread'] and details['CalibreToRead'] != kwargs['caltoread']:
+                    changes += ' CalibreToRead'
+                    myDB.action('UPDATE users SET CalibreToRead=? WHERE UserID=?', (kwargs['caltoread'], userid))
+
                 if changes:
                     return 'Updated user details:%s' % changes
             return "No changes made"
@@ -885,8 +908,8 @@ class WebInterface(object):
                 title = mag['Title']
                 reject = mag['Reject']
                 regex = mag['Regex']
-                # seems kwargs parameters from cherrypy are passed as latin-1, can't see how to
-                # configure it, so we need to correct it on accented magazine names
+                # seems kwargs parameters from cherrypy are sometimes passed as latin-1,
+                # can't see how to configure it, so we need to correct it on accented magazine names
                 # eg "Elle Quebec" where we might have e-acute stored as unicode
                 # e-acute is \xe9 in latin-1  but  \xc3\xa9 in utf-8
                 # otherwise the comparison fails, but sometimes accented characters won't
@@ -1274,8 +1297,6 @@ class WebInterface(object):
             }
             myDB.upsert("wanted", newValueDict, controlValueDict)
             AuthorID = bookdata["AuthorID"]
-            url = urllib.unquote_plus(url)
-            url = url.replace(' ', '+')
             bookname = '%s LL.(%s)' % (bookdata["BookName"], bookid)
             if 'libgen' in provider:  # for libgen we use direct download links
                 snatch = DirectDownloadMethod(bookid, bookname, url, bookdata["BookName"], library)
@@ -2239,19 +2260,14 @@ class WebInterface(object):
     def magazines(self):
         myDB = database.DBConnection()
 
-        magazines = myDB.select('SELECT "m".*, COUNT(i.title) AS "issue_cnt" FROM 	"magazines" "m" CROSS JOIN "issues" "i" WHERE	(m.title = i.title) GROUP BY "m"."Title"')
-        magcheck = myDB.select('select * from magazines')
-
+        cmd = 'select magazines.*,(select count(title) as counter from issues where magazines.title = issues.title)'
+        cmd += ' as Iss_Cnt from magazines order by Title'
+        magazines = myDB.select(cmd)
         mags = []
         covercount = 0
-        if magcheck:
+        if magazines:
             for mag in magazines:
-                title = mag['Title']
-                count = myDB.match('SELECT COUNT(Title) as counter FROM issues WHERE Title=?', (title,))
-
-                issues = mag['issue_cnt']
                 magimg = mag['LatestCover']
-
                 # special flag to say "no covers required"
                 if lazylibrarian.CONFIG['IMP_CONVERT'] == 'None' or not magimg or not os.path.isfile(magimg):
                     magimg = 'images/nocover.jpg'
@@ -2265,7 +2281,6 @@ class WebInterface(object):
                     covercount += 1
 
                 this_mag = dict(mag)
-                this_mag['Count'] = issues
                 this_mag['Cover'] = magimg
                 temp_title = mag['Title']
                 temp_title = temp_title.encode(lazylibrarian.SYS_ENCODING)
@@ -2328,11 +2343,15 @@ class WebInterface(object):
         return serve_template(templatename="issues.html", title=title, issues=mod_issues, covercount=covercount)
 
     @cherrypy.expose
-    def pastIssues(self, whichStatus=None):
+    def pastIssues(self, whichStatus=None, mag=None):
+        if mag is None:
+            title = "Past Issues"
+        else:
+            title = mag
         if whichStatus is None:
             whichStatus = "Skipped"
         return serve_template(
-            templatename="manageissues.html", title="Manage Past Issues", issues=[], whichStatus=whichStatus)
+            templatename="manageissues.html", title=title, issues=[], whichStatus=whichStatus, mag=mag)
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
@@ -2342,9 +2361,13 @@ class WebInterface(object):
         iDisplayStart = int(iDisplayStart)
         iDisplayLength = int(iDisplayLength)
         lazylibrarian.CONFIG['DISPLAYLENGTH'] = iDisplayLength
-        # need to filter on whichStatus
-        rowlist = myDB.select('SELECT NZBurl, NZBtitle, NZBdate, Auxinfo, NZBprov from pastissues WHERE Status=?',
-                              (kwargs['whichStatus'],))
+        # need to filter on whichStatus and optional mag title
+        cmd = 'SELECT NZBurl, NZBtitle, NZBdate, Auxinfo, NZBprov from pastissues WHERE Status=?'
+        args = [kwargs['whichStatus']]
+        if 'mag' in kwargs and kwargs['mag'] != 'None':
+            cmd += ' AND BookID=?'
+            args.append(kwargs['mag'].replace('&amp;', '&'))
+        rowlist = myDB.select(cmd, tuple(args))
         rows = []
         filtered = []
         if len(rowlist):
@@ -2417,8 +2440,7 @@ class WebInterface(object):
         myDB = database.DBConnection()
         maglist = []
         for nzburl in args:
-            if isinstance(nzburl, str) and hasattr(nzburl, "decode"):
-                nzburl = nzburl.decode(lazylibrarian.SYS_ENCODING)
+            nzburl = makeUnicode(nzburl)
             # ouch dirty workaround...
             if not nzburl == 'book_table_length':
                 # some NZBurl have &amp;  some have just & so need to try both forms
@@ -2552,8 +2574,7 @@ class WebInterface(object):
     def markMagazines(self, action=None, **args):
         myDB = database.DBConnection()
         for item in args:
-            if isinstance(item, str) and hasattr(item, "decode"):
-                item = item.decode(lazylibrarian.SYS_ENCODING)
+            item = makeUnicode(item)
             # ouch dirty workaround...
             if not item == 'book_table_length':
                 if action == "Paused" or action == "Active":
@@ -2915,10 +2936,7 @@ class WebInterface(object):
     @cherrypy.expose
     def history(self):
         myDB = database.DBConnection()
-        # wanted status holds snatched processed for all, plus skipped and
-        # ignored for magazine back issues
-        cmd = "SELECT BookID,NZBurl,NZBtitle,NZBdate,NZBprov,Status,NZBsize,AuxInfo"
-        cmd += " from wanted WHERE Status != 'Skipped' and Status != 'Ignored'"
+        cmd = "SELECT BookID,NZBurl,NZBtitle,NZBdate,NZBprov,Status,NZBsize,AuxInfo from wanted"
         rowlist = myDB.select(cmd)
         # turn the sqlite rowlist into a list of dicts
         rows = []
@@ -2949,11 +2967,52 @@ class WebInterface(object):
         myDB = database.DBConnection()
         if status == 'all':
             logger.info("Clearing all history")
-            myDB.action("DELETE from wanted WHERE Status != 'Skipped' and Status != 'Ignored'")
+            # also reset the Snatched status in book table to Wanted and cancel any failed download task
+            # ONLY reset if status is still Snatched, as maybe a later task succeeded
+            status = "Snatched"
+            cmd = 'SELECT BookID,AuxInfo,Source,DownloadID from wanted WHERE Status=?'
+            rowlist = myDB.select(cmd, (status,))
+            for book in rowlist:
+                if book['BookID'] != 'unknown':
+                    if book['AuxInfo'] == 'eBook':
+                        myDB.action('UPDATE books SET Status="Wanted" WHERE Bookid=? AND Status=?',
+                                    (book['BookID'], status))
+                    elif book['AuxInfo'] == 'AudioBook':
+                        myDB.action('UPDATE books SET AudioStatus="Wanted" WHERE Bookid=? AND AudioStatus=?',
+                                    (book['BookID'], status))
+                    delete_task(book['Source'], book['DownloadID'], True)
+            myDB.action("DELETE from wanted")
         else:
             logger.info("Clearing history where status is %s" % status)
+            if status == 'Snatched':
+                # also reset the Snatched status in book table to Wanted and cancel any failed download task
+                # ONLY reset if status is still Snatched, as maybe a later task succeeded
+                cmd = 'SELECT BookID,AuxInfo,Source,DownloadID from wanted WHERE Status=?'
+                rowlist = myDB.select(cmd, (status,))
+                for book in rowlist:
+                    if book['BookID'] != 'unknown':
+                        if book['AuxInfo'] == 'eBook':
+                            myDB.action('UPDATE books SET Status="Wanted" WHERE Bookid=? AND Status=?',
+                                        (book['BookID'], status))
+                        elif book['AuxInfo'] == 'AudioBook':
+                            myDB.action('UPDATE books SET AudioStatus="Wanted" WHERE Bookid=? AND AudioStatus=?',
+                                        (book['BookID'], status))
+                    delete_task(book['Source'], book['DownloadID'], True)
             myDB.action('DELETE from wanted WHERE Status=?', (status,))
         raise cherrypy.HTTPRedirect("history")
+
+    @cherrypy.expose
+    def testprovider(self, **kwargs):
+        cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
+        if 'name' in kwargs and kwargs['name']:
+            result, name = test_provider(kwargs['name'])
+            if result:
+                msg = "%s test PASSED" % name
+            else:
+                msg = "%s test FAILED, check debug log" % name
+        else:
+            msg = "Invalid or missing name in testprovider"
+        return msg
 
     @cherrypy.expose
     def clearblocked(self):
@@ -2961,7 +3020,7 @@ class WebInterface(object):
         # clear any currently blocked providers
         num = len(lazylibrarian.PROVIDER_BLOCKLIST)
         lazylibrarian.PROVIDER_BLOCKLIST = []
-        result = 'Cleared %s blocked providers' % num
+        result = 'Cleared %s blocked provider%s' % (num, plural(num))
         logger.debug(result)
         return result
 
@@ -3013,11 +3072,26 @@ class WebInterface(object):
         return result
 
     @cherrypy.expose
+    def syncToCalibre(self):
+        cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
+        if 'CalSync' in [n.name for n in [t for t in threading.enumerate()]]:
+            msg = 'Calibre Sync is already running'
+        else:
+            self.label_thread('CalSync')
+            cookie = cherrypy.request.cookie
+            if cookie and 'll_uid' in cookie.keys():
+                userid = cookie['ll_uid'].value
+                msg = syncCalibreList(userid=userid)
+                self.label_thread('WEBSERVER')
+        return msg
+
+    @cherrypy.expose
     def syncToGoodreads(self):
         if 'GRSync' not in [n.name for n in [t for t in threading.enumerate()]]:
             cherrypy.response.headers['Cache-Control'] = "max-age=0,no-cache,no-store"
             self.label_thread('GRSync')
             msg = grsync.sync_to_gr()
+            self.label_thread('WEBSERVER')
         else:
             msg = 'Goodreads Sync is already running'
         return msg
